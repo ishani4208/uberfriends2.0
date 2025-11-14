@@ -1,44 +1,78 @@
-// backend_driver.js
 import express from 'express';
 import bodyParser from 'body-parser';
 import cors from 'cors';
 import { pool } from './db.js';
-import { authenticateToken } from './auth_middleware.js'; // Import the middleware
+import { authenticateToken } from './auth_middleware.js';
 
 const app = express();
-const PORT = 8001;
+const PORT = 8080;
 
 app.use(cors());
 app.use(bodyParser.json());
 
-// The endpoint is now PROTECTED and more generic.
-// A driver can only update THEIR OWN status.
+// 1️⃣ Update driver status
 app.put('/driver/status', authenticateToken, async (req, res) => {
-    // We get the user ID from the token, not the URL parameter.
-    const { userId } = req.user;
+    const id = req.user.userid;
     const { status } = req.body;
+    const validStatuses = ['available', 'not_available', 'offline'];
 
-    if (status !== 'available') {
-        return res.status(400).json({ error: "Status can only be set to 'available'." });
+    if (!validStatuses.includes(status)) {
+        return res.status(400).json({ error: "Invalid status provided." });
     }
 
     try {
-        // We update the driver's status by matching their user_id
-        const result = await pool.query(
-            "UPDATE drivers SET status = $1 WHERE user_id = $2",
-            [status, userId]
-        );
-
-        if (result.rowCount === 0) {
-            return res.status(404).json({ error: "Driver profile not found for this user." });
+        const check = await pool.query('SELECT * FROM drivers WHERE userid = $1', [id]);
+        if (check.rows.length === 0) {
+            const autoName = `AutoDriver_${id}`;
+            const insert = await pool.query(
+                'INSERT INTO drivers (driver_name, vehicle_id, status, userid) VALUES ($1, $2, $3, $4) RETURNING *',
+                [autoName, null, status, id]
+            );
+            return res.status(201).json({
+                success: true,
+                message: `Driver profile created and set to ${status}.`,
+                driver: insert.rows[0]
+            });
         }
 
-        console.log(`Driver (User ID: ${userId}) status updated to ${status}.`);
-        res.status(200).json({ success: true, message: `You are now ${status}!` });
+        await pool.query('UPDATE drivers SET status = $1 WHERE userid = $2', [status, id]);
+        console.log(`✅ Driver ${id} updated to ${status}`);
+        res.json({ success: true, message: `Status set to ${status}` });
     } catch (e) {
-        console.error("Error updating driver status:", e);
-        res.status(500).json({ error: "Database error." });
+        console.error('❌ Status update error:', e.message);
+        res.status(500).json({ error: e.message });
     }
 });
 
-app.listen(PORT, () => console.log(`🚘 Driver Backend listening on port ${PORT}`));
+// 2️⃣ Register driver profile manually
+app.post('/drivers/register', authenticateToken, async (req, res) => {
+    const id = req.user.userid;
+    const { driver_name, vehicle_id } = req.body;
+
+    if (!driver_name || !vehicle_id) {
+        return res.status(400).json({ error: 'Missing driver_name or vehicle_id' });
+    }
+
+    try {
+        const existing = await pool.query('SELECT * FROM drivers WHERE userid = $1', [id]);
+        if (existing.rows.length > 0) {
+            return res.status(409).json({ error: 'Driver profile already exists' });
+        }
+
+        const result = await pool.query(
+            'INSERT INTO drivers (driver_name, vehicle_id, status, userid) VALUES ($1, $2, $3, $4) RETURNING *',
+            [driver_name, vehicle_id, 'offline', id]
+        );
+
+        res.status(201).json({
+            success: true,
+            message: 'Driver profile created successfully',
+            driver: result.rows[0]
+        });
+    } catch (e) {
+        console.error('❌ Driver register error:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.listen(PORT, () => console.log(`🚘 Driver backend listening on port ${PORT}`));

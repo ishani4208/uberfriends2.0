@@ -38,20 +38,20 @@ async function findAndAssignRides() {
         }
 
         const driver = driverRes.rows[0];
-        console.log(`- Found available driver: ${driver.driver_name} (ID: ${driver.id})`);
+        console.log(`- Found available driver: ${driver.driver_name} (ID: ${driver.userid})`);
 
         // Match found! Update the database records
         await client.query(
             "UPDATE ride_requests SET status = 'assigned', assigned_driver_id = $1 WHERE id = $2",
-            [driver.id, ride.id]
+            [driver.userid, ride.id]
         );
         await client.query(
-            "UPDATE drivers SET status = 'not_available' WHERE id = $1",
-            [driver.id]
+            "UPDATE drivers SET status = 'not_available' WHERE userid = $1",
+            [driver.userid]
         );
 
         await client.query('COMMIT');
-        console.log(`✅ Match successful! Assigned driver ${driver.id} to ride ${ride.id}.`);
+        console.log(`✅ Match successful! Assigned driver ${driver.userid} to ride ${ride.id}.`);
 
         // --- Notify both client and driver ---
         // 1️⃣ Notify the client
@@ -69,7 +69,7 @@ async function findAndAssignRides() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                targetId: `driver_${driver.id}`,
+                targetId: `driver_${driver.userid}`,
                 payload: { type: 'new_ride_assigned', ride, client: { id: ride.user_id, name: ride.user_name } }
             })
         });
@@ -79,23 +79,23 @@ async function findAndAssignRides() {
             try {
                 const releaseClient = await pool.connect();
                 await releaseClient.query(
-                    "UPDATE drivers SET status = 'available' WHERE id = $1",
-                    [driver.id]
+                    "UPDATE drivers SET status = 'available' WHERE userid = $1",
+                    [driver.userid]
                 );
                 releaseClient.release();
-                console.log(`🟢 Driver ${driver.id} is now available again.`);
+                console.log(`🟢 Driver ${driver.userid} is now available again.`);
 
                 // Optional: notify driver that they are available again
                 await fetch(NOTIFY_SERVER_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        targetId: `driver_${driver.id}`,
+                        targetId: `driver_${driver.userid}`,
                         payload: { type: 'driver_available', message: '✅ You are now available for new rides again!' }
                     })
                 });
             } catch (err) {
-                console.error(`❌ Failed to make driver ${driver.id} available again:`, err);
+                console.error(`❌ Failed to make driver ${driver.userid} available again:`, err);
             }
         }, 15000); // 15 seconds
 
