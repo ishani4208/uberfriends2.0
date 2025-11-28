@@ -3,7 +3,7 @@ import WebSocket from 'ws';
 import fetch from 'node-fetch';
 
 const NOTIFY_SERVER = 'ws://localhost:9000';
-const AUTH_SERVER = 'http://localhost:7000';
+const AUTH_SERVER = 'http://localhost:7001';
 const API_SERVER = 'http://localhost:8080'; // driver backend
 
 async function main() {
@@ -27,13 +27,15 @@ async function main() {
         if (!loginRes.ok) throw new Error(loginData.error || 'Login failed');
 
         const { token, user } = loginData;
-
-        // ✅ Correct ID field:
-        const driverUserId = user.userid;
+        const driverUserId = user.user_id;
         console.log(`✅ Login successful for ${user.name} (ID: ${driverUserId}).`);
 
         await goOnline(token);
-        connectAndListen(driverUserId);
+        
+        // ✅ NEW: Fetch current assigned ride on login
+        await fetchCurrentRide(token);
+        
+        connectAndListen(driverUserId, token);
 
     } catch (e) {
         console.error(`❌ ${e.message}`);
@@ -56,7 +58,48 @@ async function goOnline(token) {
     console.log(`✅ Driver is now online and available.`);
 }
 
-function connectAndListen(driverUserId) {
+// ✅ NEW FUNCTION: Fetch and display current assigned ride
+async function fetchCurrentRide(token) {
+    try {
+        const response = await fetch(`${API_SERVER}/driver/current-ride`, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            }
+        });
+
+        const data = await response.json();
+        
+        if (!response.ok) {
+            console.error('Failed to fetch current ride:', data.error);
+            return;
+        }
+
+        if (!data.hasActiveRide) {
+            console.log('\n📭 No active ride assigned at the moment.\n');
+            return;
+        }
+
+        const ride = data.ride;
+        
+        console.log('\n================================');
+        console.log('🚗 YOUR CURRENT ASSIGNED RIDE');
+        console.log('================================');
+        console.log(`Ride ID: ${ride.ride_id}`);
+        console.log(`Passenger: ${ride.passenger_name}`);
+        console.log(`Pickup: ${ride.source_location}`);
+        console.log(`Destination: ${ride.dest_location}`);
+        console.log(`Status: ${ride.status.toUpperCase()}`);
+        console.log(`Assigned at: ${new Date(ride.created_at).toLocaleString()}`);
+        console.log('================================');
+        console.log(`\n💡 To complete this ride, use: PUT /driver/complete-ride/${ride.ride_id}\n`);
+    } catch (e) {
+        console.error('Error fetching current ride:', e.message);
+    }
+}
+
+function connectAndListen(driverUserId, token) {
     const ws = new WebSocket(NOTIFY_SERVER);
 
     ws.on('open', () => {
@@ -74,6 +117,33 @@ function connectAndListen(driverUserId) {
                 console.log(`Pickup: ${msg.client.name} (ID: ${msg.client.id})`);
                 console.log(`From: ${msg.ride.source_location}`);
                 console.log(`To:   ${msg.ride.dest_location}`);
+                console.log('================================');
+                console.log(`\n💡 Complete this ride with: PUT /driver/complete-ride/${msg.ride.id}\n`);
+                break;
+
+            case 'ride_cancelled_by_client':
+                console.log('\n================================');
+                console.log('🚫 RIDE CANCELLED BY CLIENT');
+                console.log(msg.message);
+                console.log(`From: ${msg.source_location}`);
+                console.log(`To: ${msg.dest_location}`);
+                console.log('✅ You are now available for new rides.');
+                console.log('================================\n');
+                break;
+
+            case 'driver_available':
+                console.log('\n================================');
+                console.log('🟢 YOU ARE NOW AVAILABLE');
+                console.log(msg.message);
+                console.log('================================\n');
+                break;
+            
+            case 'ride_cancelled_by_meetup':
+                console.log('\n================================');
+                console.log('🚫 RIDE CANCELLED - MEETUP CANCELLED');
+                console.log(msg.message);
+                console.log(`Reason: ${msg.reason}`);
+                console.log('✅ You are now available for new rides.');
                 console.log('================================\n');
                 break;
 
