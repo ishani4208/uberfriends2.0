@@ -324,6 +324,209 @@ app.get('/rides/current', authenticateToken, async (req, res) => {
     }
 });
 
+// 1️⃣ GET RIDE HISTORY FOR THE LOGGED-IN USER (All statuses)
+app.get('/rides/history', authenticateToken, async (req, res) => {
+    const userId = req.user.user_id;
+    const { status, limit = 50, offset = 0 } = req.query;
+    
+    console.log(`📜 Fetching ride history for user ${userId}`);
+    
+    try {
+        // Build the WHERE clause based on filters
+        let whereClause = 'WHERE rr.user_id = $1';
+        const params = [userId];
+        
+        // Optional status filter
+        if (status) {
+            const validStatuses = ['pending', 'assigned', 'completed', 'cancelled'];
+            if (validStatuses.includes(status)) {
+                whereClause += ` AND rr.status = $${params.length + 1}`;
+                params.push(status);
+            }
+        }
+        
+        // Get total count for pagination
+        const countResult = await pool.query(`
+            SELECT COUNT(*) as total
+            FROM ride_requests rr
+            ${whereClause}
+        `, params);
+        
+        const totalRides = parseInt(countResult.rows[0].total);
+        
+        // Get paginated ride history
+        const result = await pool.query(`
+            SELECT 
+                rr.id as ride_id,
+                rr.user_id,
+                rr.user_name,
+                rr.source_location,
+                rr.dest_location,
+                rr.status,
+                rr.assigned_driver_id,
+                rr.created_at,
+                d.driver_name,
+                d.vehicle_id,
+                d.contact_number
+            FROM ride_requests rr
+            LEFT JOIN drivers d ON rr.assigned_driver_id = d.user_id
+            ${whereClause}
+            ORDER BY rr.created_at DESC
+            LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+        `, [...params, parseInt(limit), parseInt(offset)]);
+        
+        // Group rides by status for statistics
+        const statsResult = await pool.query(`
+            SELECT 
+                status,
+                COUNT(*) as count
+            FROM ride_requests
+            WHERE user_id = $1
+            GROUP BY status
+        `, [userId]);
+        
+        const stats = {
+            total: totalRides,
+            completed: 0,
+            cancelled: 0,
+            pending: 0,
+            assigned: 0
+        };
+        
+        statsResult.rows.forEach(row => {
+            stats[row.status] = parseInt(row.count);
+        });
+        
+        console.log(`✅ Found ${result.rows.length} ride(s) for user ${userId}`);
+        
+        res.json({
+            success: true,
+            stats: stats,
+            pagination: {
+                total: totalRides,
+                limit: parseInt(limit),
+                offset: parseInt(offset),
+                returned: result.rows.length
+            },
+            rides: result.rows
+        });
+        
+    } catch (e) {
+        console.error('❌ Error fetching ride history:', e);
+        res.status(500).json({ error: 'Failed to fetch ride history', details: e.message });
+    }
+});
+
+// 2️⃣ GET COMPLETED RIDES ONLY
+app.get('/rides/history/completed', authenticateToken, async (req, res) => {
+    const userId = req.user.user_id;
+    const { limit = 20 } = req.query;
+    
+    console.log(`✅ Fetching completed rides for user ${userId}`);
+    
+    try {
+        const result = await pool.query(`
+            SELECT 
+                rr.id as ride_id,
+                rr.source_location,
+                rr.dest_location,
+                rr.status,
+                rr.created_at,
+                d.driver_name,
+                d.vehicle_id,
+                d.contact_number
+            FROM ride_requests rr
+            LEFT JOIN drivers d ON rr.assigned_driver_id = d.user_id
+            WHERE rr.user_id = $1 AND rr.status = 'completed'
+            ORDER BY rr.created_at DESC
+            LIMIT $2
+        `, [userId, parseInt(limit)]);
+        
+        res.json({
+            success: true,
+            count: result.rows.length,
+            rides: result.rows
+        });
+        
+    } catch (e) {
+        console.error('❌ Error fetching completed rides:', e);
+        res.status(500).json({ error: 'Failed to fetch completed rides', details: e.message });
+    }
+});
+
+// 4️⃣ GET RIDE STATISTICS/SUMMARY
+app.get('/rides/stats', authenticateToken, async (req, res) => {
+    const userId = req.user.user_id;
+    
+    console.log(`📊 Fetching ride statistics for user ${userId}`);
+    
+    try {
+        // Get ride counts by status
+        const statusStats = await pool.query(`
+            SELECT 
+                status,
+                COUNT(*) as count
+            FROM ride_requests
+            WHERE user_id = $1
+            GROUP BY status
+        `, [userId]);
+        
+        // Get total rides
+        const totalResult = await pool.query(`
+            SELECT COUNT(*) as total
+            FROM ride_requests
+            WHERE user_id = $1
+        `, [userId]);
+        
+        // Get most recent ride
+        const recentRide = await pool.query(`
+            SELECT 
+                id as ride_id,
+                source_location,
+                dest_location,
+                status,
+                created_at
+            FROM ride_requests
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+            LIMIT 1
+        `, [userId]);
+        
+        // Get unique drivers count
+        const driversCount = await pool.query(`
+            SELECT COUNT(DISTINCT assigned_driver_id) as unique_drivers
+            FROM ride_requests
+            WHERE user_id = $1 AND assigned_driver_id IS NOT NULL
+        `, [userId]);
+        
+        const stats = {
+            total_rides: parseInt(totalResult.rows[0].total),
+            completed: 0,
+            cancelled: 0,
+            pending: 0,
+            assigned: 0
+        };
+        
+        statusStats.rows.forEach(row => {
+            stats[row.status] = parseInt(row.count);
+        });
+        
+        res.json({
+            success: true,
+            summary: {
+                ...stats,
+                unique_drivers: parseInt(driversCount.rows[0].unique_drivers),
+                most_recent_ride: recentRide.rows[0] || null
+            }
+        });
+        
+    } catch (e) {
+        console.error('❌ Error fetching ride stats:', e);
+        res.status(500).json({ error: 'Failed to fetch ride stats', details: e.message });
+    }
+});
+
+
 // 2️⃣ GET SPECIFIC RIDE DETAILS BY RIDE ID
 app.get('/rides/:ride_id', authenticateToken, async (req, res) => {
     const userId = req.user.user_id;
@@ -389,8 +592,8 @@ app.get('/rides/:ride_id', authenticateToken, async (req, res) => {
 //
 app.delete('/rides/:ride_id/cancel', authenticateToken, async (req, res) => {
     const userId = req.user.user_id;
-    const { ride_id } = req.params;
-    
+    const ride_id = parseInt(req.params.ride_id);
+
     console.log(`🚫 User ${userId} attempting to cancel ride ${ride_id}`);
     
     const client = await pool.connect();
@@ -688,14 +891,20 @@ app.get('/meetups/my-meetups', authenticateToken, async (req, res) => {
 });
 
 // 1️⃣ GET DETAILED MEETUP STATUS (for organizer and participants)
+// FIXED VERSION of /meetups/:meetup_id/status endpoint
+// Replace your /meetups/:meetup_id/status endpoint with this DEBUG version
+// This will show you EXACTLY which query is failing
+
 app.get('/meetups/:meetup_id/status', authenticateToken, async (req, res) => {
     const userId = req.user.user_id;
-    const { meetup_id } = req.params;
+    const meetup_id = parseInt(req.params.meetup_id);
     
     console.log(`📊 Fetching status for meetup ${meetup_id} by user ${userId}`);
+    console.log(`📊 meetup_id type: ${typeof meetup_id}, value: ${meetup_id}`);
     
     try {
-        // Get meetup basic info
+        // QUERY 1
+        console.log('🔍 Running QUERY 1: Fetch meetup details...');
         const meetupResult = await pool.query(`
             SELECT 
                 m.id as meetup_id,
@@ -709,19 +918,24 @@ app.get('/meetups/:meetup_id/status', authenticateToken, async (req, res) => {
             JOIN users u ON m.organizer_id = u.user_id
             WHERE m.id = $1
         `, [meetup_id]);
+        console.log('✅ QUERY 1 succeeded');
         
         if (meetupResult.rows.length === 0) {
             return res.status(404).json({ error: 'Meetup not found' });
         }
         
         const meetup = meetupResult.rows[0];
+        console.log(`📍 meetup_location: "${meetup.meetup_location}", type: ${typeof meetup.meetup_location}`);
         
-        // Check if user is authorized (organizer or invitee)
+        // QUERY 2
+        console.log('🔍 Running QUERY 2: Auth check...');
+        console.log(`   Parameters: meetup_id=${meetup_id} (${typeof meetup_id}), userId=${userId} (${typeof userId})`);
         const authCheck = await pool.query(`
             SELECT COUNT(*) as count 
             FROM meetup_invites 
             WHERE meetup_id = $1 AND invitee_id = $2
         `, [meetup_id, userId]);
+        console.log('✅ QUERY 2 succeeded');
         
         const isOrganizer = meetup.organizer_id === userId;
         const isInvitee = parseInt(authCheck.rows[0].count) > 0;
@@ -732,7 +946,9 @@ app.get('/meetups/:meetup_id/status', authenticateToken, async (req, res) => {
             });
         }
         
-        // Get all invites with user details and ride status
+        // QUERY 3
+        console.log('🔍 Running QUERY 3: Fetch invites...');
+        console.log(`   Parameters: meetup_location="${meetup.meetup_location}" (${typeof meetup.meetup_location}), meetup_id=${meetup_id} (${typeof meetup_id})`);
         const invitesResult = await pool.query(`
             SELECT 
                 mi.id as invite_id,
@@ -757,8 +973,11 @@ app.get('/meetups/:meetup_id/status', authenticateToken, async (req, res) => {
             WHERE mi.meetup_id = $2
             ORDER BY mi.created_at ASC
         `, [meetup.meetup_location, meetup_id]);
+        console.log('✅ QUERY 3 succeeded');
         
-        // Get organizer's ride status
+        // QUERY 4
+        console.log('🔍 Running QUERY 4: Fetch organizer ride...');
+        console.log(`   Parameters: organizer_id=${meetup.organizer_id} (${typeof meetup.organizer_id}), meetup_location="${meetup.meetup_location}" (${typeof meetup.meetup_location})`);
         const organizerRideResult = await pool.query(`
             SELECT 
                 rr.id as ride_id,
@@ -775,10 +994,11 @@ app.get('/meetups/:meetup_id/status', authenticateToken, async (req, res) => {
             ORDER BY rr.created_at DESC
             LIMIT 1
         `, [meetup.organizer_id, meetup.meetup_location]);
+        console.log('✅ QUERY 4 succeeded');
         
         const organizerRide = organizerRideResult.rows[0] || null;
         
-        // Calculate statistics
+        // Rest of your code...
         const inviteStats = {
             total: invitesResult.rows.length,
             pending: invitesResult.rows.filter(i => i.invite_status === 'pending').length,
@@ -786,10 +1006,9 @@ app.get('/meetups/:meetup_id/status', authenticateToken, async (req, res) => {
             rejected: invitesResult.rows.filter(i => i.invite_status === 'rejected').length
         };
         
-        // Calculate ride completion status for accepted invites
         const acceptedInvites = invitesResult.rows.filter(i => i.invite_status === 'accepted');
         const rideStats = {
-            total_participants: acceptedInvites.length + 1, // +1 for organizer
+            total_participants: acceptedInvites.length + 1,
             rides_completed: acceptedInvites.filter(i => i.ride_status === 'completed').length + 
                            (organizerRide?.ride_status === 'completed' ? 1 : 0),
             rides_in_progress: acceptedInvites.filter(i => i.ride_status === 'assigned').length + 
@@ -798,74 +1017,75 @@ app.get('/meetups/:meetup_id/status', authenticateToken, async (req, res) => {
                          (organizerRide?.ride_status === 'pending' ? 1 : 0)
         };
         
-        // Determine overall meetup status
         let calculatedStatus = meetup.status;
         if (rideStats.rides_completed === rideStats.total_participants && rideStats.total_participants > 0) {
             calculatedStatus = 'all_arrived';
-            // Update meetup status in database if not already updated
+            console.log('🔍 Running QUERY 5: Update meetup status to all_arrived...');
             if (meetup.status !== 'all_arrived') {
                 await pool.query(
                     "UPDATE meetups SET status = 'all_arrived' WHERE id = $1",
                     [meetup_id]
                 );
             }
+            console.log('✅ QUERY 5 succeeded');
         } else if (rideStats.rides_in_progress > 0 || rideStats.rides_completed > 0) {
             calculatedStatus = 'in_progress';
+            console.log('🔍 Running QUERY 6: Update meetup status to in_progress...');
             if (meetup.status === 'pending') {
                 await pool.query(
                     "UPDATE meetups SET status = 'in_progress' WHERE id = $1",
                     [meetup_id]
                 );
             }
+            console.log('✅ QUERY 6 succeeded');
         }
         
-        // Build participant list with ride details
         const participants = [
-    {
-        user_id: meetup.organizer_id,
-        name: meetup.organizer_name,
-        email: meetup.organizer_email,
-        role: 'organizer',
-        invite_status: 'accepted',
-        ride: organizerRide ? {
-            ride_id: organizerRide.ride_id,
-            status: organizerRide.ride_status,
-            source_location: organizerRide.source_location,
-            driver: organizerRide.assigned_driver_id ? {
-                driver_name: organizerRide.driver_name,
-                vehicle_id: organizerRide.vehicle_id
-            } : null
-        } : null,
-        has_arrived: organizerRide?.ride_status === 'completed',
-        eta: organizerRide?.ride_status === 'assigned' ? 'En route' : 
-             organizerRide?.ride_status === 'pending' ? 'Finding driver...' :
-             organizerRide?.ride_status === 'completed' ? 'Arrived' : 'Not booked'
-    },
-    ...invitesResult.rows.map(inv => ({
-        user_id: inv.user_id,
-        name: inv.name,
-        email: inv.email,
-        role: 'invitee',
-        invite_id: inv.invite_id,
-        invite_status: inv.invite_status,
-        ride: inv.ride_id ? {
-            ride_id: inv.ride_id,
-            status: inv.ride_status,
-            source_location: inv.invitee_source_location,
-            driver: inv.assigned_driver_id ? {
-                driver_name: inv.driver_name,
-                vehicle_id: inv.vehicle_id
-            } : null
-        } : null,
-        has_arrived: inv.ride_status === 'completed',
-        // ✅ ADD THIS ETA FIELD FOR INVITEES TOO:
-        eta: inv.ride_status === 'assigned' ? 'En route' : 
-             inv.ride_status === 'pending' ? 'Finding driver...' :
-             inv.ride_status === 'completed' ? 'Arrived' : 
-             inv.invite_status === 'pending' ? 'Awaiting response' :
-             inv.invite_status === 'rejected' ? 'Declined' : 'Not booked'
-    }))
-];
+            {
+                user_id: meetup.organizer_id,
+                name: meetup.organizer_name,
+                email: meetup.organizer_email,
+                role: 'organizer',
+                invite_status: 'accepted',
+                ride: organizerRide ? {
+                    ride_id: organizerRide.ride_id,
+                    status: organizerRide.ride_status,
+                    source_location: organizerRide.source_location,
+                    driver: organizerRide.assigned_driver_id ? {
+                        driver_name: organizerRide.driver_name,
+                        vehicle_id: organizerRide.vehicle_id
+                    } : null
+                } : null,
+                has_arrived: organizerRide?.ride_status === 'completed',
+                eta: organizerRide?.ride_status === 'assigned' ? 'En route' : 
+                     organizerRide?.ride_status === 'pending' ? 'Finding driver...' :
+                     organizerRide?.ride_status === 'completed' ? 'Arrived' : 'Not booked'
+            },
+            ...invitesResult.rows.map(inv => ({
+                user_id: inv.user_id,
+                name: inv.name,
+                email: inv.email,
+                role: 'invitee',
+                invite_id: inv.invite_id,
+                invite_status: inv.invite_status,
+                ride: inv.ride_id ? {
+                    ride_id: inv.ride_id,
+                    status: inv.ride_status,
+                    source_location: inv.invitee_source_location,
+                    driver: inv.assigned_driver_id ? {
+                        driver_name: inv.driver_name,
+                        vehicle_id: inv.vehicle_id
+                    } : null
+                } : null,
+                has_arrived: inv.ride_status === 'completed',
+                eta: inv.ride_status === 'assigned' ? 'En route' : 
+                     inv.ride_status === 'pending' ? 'Finding driver...' :
+                     inv.ride_status === 'completed' ? 'Arrived' : 
+                     inv.invite_status === 'pending' ? 'Awaiting response' :
+                     inv.invite_status === 'rejected' ? 'Declined' : 'Not booked'
+            }))
+        ];
+        
         console.log(`✅ Meetup ${meetup_id} status: ${calculatedStatus}`);
         
         res.json({
@@ -889,6 +1109,8 @@ app.get('/meetups/:meetup_id/status', authenticateToken, async (req, res) => {
         
     } catch (e) {
         console.error('❌ Error fetching meetup status:', e);
+        console.error('❌ Error details:', e.message);
+        console.error('❌ Error stack:', e.stack);
         res.status(500).json({ error: 'Failed to fetch meetup status', details: e.message });
     }
 });
@@ -896,7 +1118,7 @@ app.get('/meetups/:meetup_id/status', authenticateToken, async (req, res) => {
 // 2️⃣ GET SIMPLIFIED MEETUP PROGRESS (quick overview)
 app.get('/meetups/:meetup_id/progress', authenticateToken, async (req, res) => {
     const userId = req.user.user_id;
-    const { meetup_id } = req.params;
+    const meetup_id = parseInt(req.params.meetup_id);
     
     console.log(`🔍 Fetching progress for meetup ${meetup_id}`);
     
@@ -981,135 +1203,8 @@ app.get('/meetups/:meetup_id/progress', authenticateToken, async (req, res) => {
     }
 });
 
-// 1️⃣ GET RIDE HISTORY FOR THE LOGGED-IN USER (All statuses)
-app.get('/rides/history', authenticateToken, async (req, res) => {
-    const userId = req.user.user_id;
-    const { status, limit = 50, offset = 0 } = req.query;
-    
-    console.log(`📜 Fetching ride history for user ${userId}`);
-    
-    try {
-        // Build the WHERE clause based on filters
-        let whereClause = 'WHERE rr.user_id = $1';
-        const params = [userId];
-        
-        // Optional status filter
-        if (status) {
-            const validStatuses = ['pending', 'assigned', 'completed', 'cancelled'];
-            if (validStatuses.includes(status)) {
-                whereClause += ` AND rr.status = $${params.length + 1}`;
-                params.push(status);
-            }
-        }
-        
-        // Get total count for pagination
-        const countResult = await pool.query(`
-            SELECT COUNT(*) as total
-            FROM ride_requests rr
-            ${whereClause}
-        `, params);
-        
-        const totalRides = parseInt(countResult.rows[0].total);
-        
-        // Get paginated ride history
-        const result = await pool.query(`
-            SELECT 
-                rr.id as ride_id,
-                rr.user_id,
-                rr.user_name,
-                rr.source_location,
-                rr.dest_location,
-                rr.status,
-                rr.assigned_driver_id,
-                rr.created_at,
-                d.driver_name,
-                d.vehicle_id,
-                d.contact_number
-            FROM ride_requests rr
-            LEFT JOIN drivers d ON rr.assigned_driver_id = d.user_id
-            ${whereClause}
-            ORDER BY rr.created_at DESC
-            LIMIT $${params.length + 1} OFFSET $${params.length + 2}
-        `, [...params, parseInt(limit), parseInt(offset)]);
-        
-        // Group rides by status for statistics
-        const statsResult = await pool.query(`
-            SELECT 
-                status,
-                COUNT(*) as count
-            FROM ride_requests
-            WHERE user_id = $1
-            GROUP BY status
-        `, [userId]);
-        
-        const stats = {
-            total: totalRides,
-            completed: 0,
-            cancelled: 0,
-            pending: 0,
-            assigned: 0
-        };
-        
-        statsResult.rows.forEach(row => {
-            stats[row.status] = parseInt(row.count);
-        });
-        
-        console.log(`✅ Found ${result.rows.length} ride(s) for user ${userId}`);
-        
-        res.json({
-            success: true,
-            stats: stats,
-            pagination: {
-                total: totalRides,
-                limit: parseInt(limit),
-                offset: parseInt(offset),
-                returned: result.rows.length
-            },
-            rides: result.rows
-        });
-        
-    } catch (e) {
-        console.error('❌ Error fetching ride history:', e);
-        res.status(500).json({ error: 'Failed to fetch ride history', details: e.message });
-    }
-});
 
-// 2️⃣ GET COMPLETED RIDES ONLY
-app.get('/rides/history/completed', authenticateToken, async (req, res) => {
-    const userId = req.user.user_id;
-    const { limit = 20 } = req.query;
-    
-    console.log(`✅ Fetching completed rides for user ${userId}`);
-    
-    try {
-        const result = await pool.query(`
-            SELECT 
-                rr.id as ride_id,
-                rr.source_location,
-                rr.dest_location,
-                rr.status,
-                rr.created_at,
-                d.driver_name,
-                d.vehicle_id,
-                d.contact_number
-            FROM ride_requests rr
-            LEFT JOIN drivers d ON rr.assigned_driver_id = d.user_id
-            WHERE rr.user_id = $1 AND rr.status = 'completed'
-            ORDER BY rr.created_at DESC
-            LIMIT $2
-        `, [userId, parseInt(limit)]);
-        
-        res.json({
-            success: true,
-            count: result.rows.length,
-            rides: result.rows
-        });
-        
-    } catch (e) {
-        console.error('❌ Error fetching completed rides:', e);
-        res.status(500).json({ error: 'Failed to fetch completed rides', details: e.message });
-    }
-});
+
 
 // 3️⃣ GET SPECIFIC RIDE DETAILS WITH FULL HISTORY INFO
 app.get('/rides/:ride_id/details', authenticateToken, async (req, res) => {
@@ -1210,81 +1305,11 @@ app.get('/rides/:ride_id/details', authenticateToken, async (req, res) => {
     }
 });
 
-// 4️⃣ GET RIDE STATISTICS/SUMMARY
-app.get('/rides/stats', authenticateToken, async (req, res) => {
-    const userId = req.user.user_id;
-    
-    console.log(`📊 Fetching ride statistics for user ${userId}`);
-    
-    try {
-        // Get ride counts by status
-        const statusStats = await pool.query(`
-            SELECT 
-                status,
-                COUNT(*) as count
-            FROM ride_requests
-            WHERE user_id = $1
-            GROUP BY status
-        `, [userId]);
-        
-        // Get total rides
-        const totalResult = await pool.query(`
-            SELECT COUNT(*) as total
-            FROM ride_requests
-            WHERE user_id = $1
-        `, [userId]);
-        
-        // Get most recent ride
-        const recentRide = await pool.query(`
-            SELECT 
-                id as ride_id,
-                source_location,
-                dest_location,
-                status,
-                created_at
-            FROM ride_requests
-            WHERE user_id = $1
-            ORDER BY created_at DESC
-            LIMIT 1
-        `, [userId]);
-        
-        // Get unique drivers count
-        const driversCount = await pool.query(`
-            SELECT COUNT(DISTINCT assigned_driver_id) as unique_drivers
-            FROM ride_requests
-            WHERE user_id = $1 AND assigned_driver_id IS NOT NULL
-        `, [userId]);
-        
-        const stats = {
-            total_rides: parseInt(totalResult.rows[0].total),
-            completed: 0,
-            cancelled: 0,
-            pending: 0,
-            assigned: 0
-        };
-        
-        statusStats.rows.forEach(row => {
-            stats[row.status] = parseInt(row.count);
-        });
-        
-        res.json({
-            success: true,
-            summary: {
-                ...stats,
-                unique_drivers: parseInt(driversCount.rows[0].unique_drivers),
-                most_recent_ride: recentRide.rows[0] || null
-            }
-        });
-        
-    } catch (e) {
-        console.error('❌ Error fetching ride stats:', e);
-        res.status(500).json({ error: 'Failed to fetch ride stats', details: e.message });
-    }
-});
+
 
 app.delete('/meetups/:meetup_id/cancel', authenticateToken, async (req, res) => {
     const userId = req.user.user_id;
-    const { meetup_id } = req.params;
+    const meetup_id = parseInt(req.params.meetup_id);
     const { reason } = req.body; // Optional cancellation reason
     
     console.log(`🚫 User ${userId} attempting to cancel meetup ${meetup_id}`);

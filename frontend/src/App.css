@@ -1,0 +1,91 @@
+.App {
+  min-height: 100vh;
+}
+
+/* Input focus glow effect */
+input:focus,
+textarea:focus {
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  transition: box-shadow 0.2s ease;
+}
+
+/* Button hover effects */
+button {
+  transition: all 0.2s ease;
+}
+
+button:active {
+  transform: scale(0.98);
+}
+
+/* Card hover effect */
+.card-hover {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+}
+
+/* Notification animation */
+.notification-enter {
+  animation: slideInRight 0.3s ease-out;
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* Loading spinner */
+.spinner {
+  border: 3px solid rgba(255, 255, 255, 0.1);
+  border-top: 3px solid #3b82f6;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Status badge colors */
+.status-pending {
+  background-color: #fbbf24;
+  color: #78350f;
+}
+
+.status-assigned {
+  background-color: #60a5fa;
+  color: #1e3a8a;
+}
+
+.status-completed {
+  background-color: #34d399;
+  color: #064e3b;
+}
+
+.status-cancelled {
+  background-color: #f87171;
+  color: #7f1d1d;
+}
+
+/* Modal backdrop blur */
+.modal-backdrop {
+  backdrop-filter: blur(4px);
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
