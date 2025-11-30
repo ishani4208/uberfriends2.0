@@ -297,6 +297,63 @@ app.put('/driver/complete-ride/:ride_id', authenticateToken, async (req, res) =>
     }
 });
 
+// ADD THIS TO YOUR backend_driver.js file
+
+// GET DRIVER STATISTICS
+app.get('/driver/stats', authenticateToken, async (req, res) => {
+    const driverId = req.user.user_id; // From JWT token
+    
+    console.log(`📊 Fetching stats for driver ${driverId}`);
+    
+    try {
+        // Get total completed rides
+        const completedResult = await pool.query(`
+            SELECT COUNT(*) as total_completed
+            FROM ride_requests
+            WHERE assigned_driver_id = $1 AND status = 'completed'
+        `, [driverId]);
+        
+        // Get current driver status
+        const statusResult = await pool.query(`
+            SELECT status
+            FROM drivers
+            WHERE user_id = $1
+        `, [driverId]);
+        
+        if (statusResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Driver not found' });
+        }
+        
+        // Get ride breakdown by status
+        const breakdownResult = await pool.query(`
+            SELECT 
+                status,
+                COUNT(*) as count
+            FROM ride_requests
+            WHERE assigned_driver_id = $1
+            GROUP BY status
+            ORDER BY status
+        `, [driverId]);
+        
+        const totalCompleted = parseInt(completedResult.rows[0].total_completed);
+        const currentStatus = statusResult.rows[0].status;
+        
+        console.log(`✅ Driver ${driverId} has completed ${totalCompleted} rides`);
+        
+        res.json({
+            success: true,
+            stats: {
+                total_completed: totalCompleted,
+                current_status: currentStatus,
+                ride_breakdown: breakdownResult.rows
+            }
+        });
+        
+    } catch (e) {
+        console.error('❌ Error fetching driver stats:', e);
+        res.status(500).json({ error: 'Failed to fetch driver stats', details: e.message });
+    }
+});
 
 // ===========================================
 // == VIEW DRIVER'S CURRENT RIDE ==
