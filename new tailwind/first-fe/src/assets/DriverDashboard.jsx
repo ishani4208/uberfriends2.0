@@ -29,7 +29,13 @@ const DriverDashboard = ({ user, token, logout, lastNotification }) => {
   const fetchDriverData = async () => {
     try {
       console.log("Fetching driver data..."); // Debug log
-      
+      const statusRes = await fetch(`${DRIVER_SERVER}/driver/stats`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const statusData = await statusRes.json();
+      if (statusData.stats?.current_status) {
+          setStatus(statusData.stats.current_status);
+      }
       const rideRes = await fetch(`${DRIVER_SERVER}/driver/current-ride`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -53,6 +59,10 @@ const DriverDashboard = ({ user, token, logout, lastNotification }) => {
       }
     } catch (e) { console.error("Driver fetch error:", e); }
   };
+
+  useEffect(() => {
+    fetchDriverData();
+}, []);
 
   // ✅ REAL-TIME INVITE LISTENER
   useEffect(() => { 
