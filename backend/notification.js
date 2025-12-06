@@ -19,7 +19,7 @@ app.post('/send-notification', (req, res) => {
 
     const targetSocket = connections.get(targetId);
 
-    if (targetSocket && targetSocket.readyState === 1) { // 1 = WebSocket.OPEN
+    if (targetSocket && targetSocket.readyState === WebSocket.OPEN) { 
         targetSocket.send(JSON.stringify(payload));
         console.log(`  ✅ Notification sent successfully to ${targetId}.`);
         res.status(200).json({ success: true, message: 'Notification sent.' });

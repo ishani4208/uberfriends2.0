@@ -7,7 +7,7 @@ export const pool = new Pool({
   host: "localhost",
   // database: "ridesdb",
   // password: "1234abc",
-  database: "uber-2",
-  password: "ishaninotokbutwhocares",
+  database: "ridesdb",
+  password: "1234abc",
   port: 5432,
 });
