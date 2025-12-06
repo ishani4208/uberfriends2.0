@@ -106,11 +106,20 @@ const PassengerDashboard = ({ user, token, logout, lastNotification }) => {
   // ==========================================
   useEffect(() => { fetchPassengerData(); }, []);
 
-  useEffect(() => { 
+  useEffect(() => {
     if (lastNotification) {
-        fetchPassengerData(); 
+        fetchPassengerData();
+        // ✅ ADD: Type-specific user feedback
+        if (lastNotification.type === 'ride_completed') {
+            alert('🎉 Your ride has been completed!');
+        } else if (lastNotification.type === 'ride_cancelled_by_driver') {
+            alert('⚠️ Your driver cancelled. Finding another driver...');
+        } else if (lastNotification.type === 'meetup_cancelled') {
+            alert('❌ The meetup has been cancelled by the organizer.');
+        }
     }
-  }, [lastNotification]);
+}, [lastNotification]);
+
 
   useEffect(() => {
       if (view === 'history') {
@@ -182,7 +191,7 @@ const PassengerDashboard = ({ user, token, logout, lastNotification }) => {
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
             body: JSON.stringify({ 
                 meetup_location: meetupLoc, 
-                invitee_usernames: meetupEmails.split(','), 
+                invitee_usernames: meetupEmails.split(',').map(e => e.trim()),
                 organizer_source_location: meetupSource 
             })
         });
