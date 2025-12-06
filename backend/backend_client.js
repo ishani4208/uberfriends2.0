@@ -595,7 +595,9 @@ app.delete('/rides/:ride_id/cancel', authenticateToken, async (req, res) => {
     const ride_id = parseInt(req.params.ride_id);
 
     console.log(`🚫 User ${userId} attempting to cancel ride ${ride_id}`);
-    
+    if (isNaN(ride_id)) {
+        return res.status(400).json({ error: 'Invalid ride ID' });
+    }
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -646,7 +648,7 @@ app.delete('/rides/:ride_id/cancel', authenticateToken, async (req, res) => {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    targetId: `driver_${ride.assigned_driver_id}`,
+                    targetId: `client_${ride.assigned_driver_id}`,
                     payload: {
                         type: 'ride_cancelled_by_client',
                         message: `Ride cancelled by ${ride.user_name}`,
@@ -898,7 +900,9 @@ app.get('/meetups/my-meetups', authenticateToken, async (req, res) => {
 app.get('/meetups/:meetup_id/status', authenticateToken, async (req, res) => {
     const userId = req.user.user_id;
     const meetup_id = parseInt(req.params.meetup_id);
-    
+    if (isNaN(meetup_id)) {
+        return res.status(400).json({ error: 'Invalid meetup ID' });
+    }
     console.log(`📊 Fetching status for meetup ${meetup_id} by user ${userId}`);
     console.log(`📊 meetup_id type: ${typeof meetup_id}, value: ${meetup_id}`);
     
@@ -1119,7 +1123,9 @@ app.get('/meetups/:meetup_id/status', authenticateToken, async (req, res) => {
 app.get('/meetups/:meetup_id/progress', authenticateToken, async (req, res) => {
     const userId = req.user.user_id;
     const meetup_id = parseInt(req.params.meetup_id);
-    
+    if (isNaN(meetup_id)) {
+        return res.status(400).json({ error: 'Invalid meetup ID' });
+    }
     console.log(`🔍 Fetching progress for meetup ${meetup_id}`);
     
     try {
@@ -1311,7 +1317,9 @@ app.delete('/meetups/:meetup_id/cancel', authenticateToken, async (req, res) => 
     const userId = req.user.user_id;
     const meetup_id = parseInt(req.params.meetup_id);
     const { reason } = req.body; // Optional cancellation reason
-    
+    if (isNaN(meetup_id)) {
+        return res.status(400).json({ error: 'Invalid meetup ID' });
+    }
     console.log(`🚫 User ${userId} attempting to cancel meetup ${meetup_id}`);
     
     const client = await pool.connect();
