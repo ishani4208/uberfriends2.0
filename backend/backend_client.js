@@ -5,6 +5,14 @@ import { pool } from './db.js';
 import fetch from 'node-fetch';
 import { authenticateToken } from './auth_middleware.js';
 
+import { 
+    calculateDistance, 
+    calculateFare, 
+    calculateETA, 
+    isValidCoordinate 
+} from './utils/location.js';
+
+
 const app = express();
 const PORT = 8000;
 const NOTIFY_SERVER_URL = 'http://localhost:9000/send-notification';
@@ -12,33 +20,161 @@ const NOTIFY_SERVER_URL = 'http://localhost:9000/send-notification';
 app.use(cors());
 app.use(bodyParser.json());
 
-// ===========================================
-// == STANDARD RIDE BOOKING ENDPOINT ==
-// ===========================================
+app.post('/estimate-fare', authenticateToken, async (req, res) => {
+    const { 
+        source_lat, 
+        source_lng, 
+        dest_lat, 
+        dest_lng, 
+        ride_type = 'standard' 
+    } = req.body;
 
-app.post('/book-ride', authenticateToken, async (req, res) => {
-    const userId = req.user.user_id; 
-    const { source_location, dest_location } = req.body;
-
-    if (!source_location || !dest_location) {
-        return res.status(400).json({ error: "Missing required fields." });
+    // Validate coordinates
+    if (!isValidCoordinate(source_lat, source_lng) || 
+        !isValidCoordinate(dest_lat, dest_lng)) {
+        return res.status(400).json({ 
+            error: "Invalid coordinates provided." 
+        });
     }
 
     try {
-        const userRes = await pool.query("SELECT name FROM users WHERE user_id = $1", [userId]);
+        // Calculate distance using Haversine
+        const distance = calculateDistance(
+            source_lat, source_lng, 
+            dest_lat, dest_lng
+        );
+
+        // Calculate fares for all ride types
+        const standardFare = calculateFare(distance, 'standard');
+        const premiumFare = calculateFare(distance, 'premium');
+        const sharedFare = calculateFare(distance, 'shared');
+
+        // Calculate ETA
+        const eta = calculateETA(distance);
+
+        res.json({
+            success: true,
+            distance: `${distance} km`,
+            estimated_time: eta.formattedTime,
+            fare_options: {
+                standard: standardFare,
+                premium: premiumFare,
+                shared: sharedFare
+            }
+        });
+
+    } catch (e) {
+        console.error("Error estimating fare:", e);
+        res.status(500).json({ error: "Failed to estimate fare." });
+    }
+});
+
+// ===========================================
+// == UPDATED: BOOK RIDE WITH COORDINATES ==
+// ===========================================
+app.post('/book-ride', authenticateToken, async (req, res) => {
+    const userId = req.user.user_id;
+    const { 
+        source_lat, 
+        source_lng, 
+        source_address,
+        dest_lat, 
+        dest_lng, 
+        dest_address,
+        ride_type = 'standard'
+    } = req.body;
+
+    // Validate required fields
+    if (!source_lat || !source_lng || !dest_lat || !dest_lng) {
+        return res.status(400).json({ 
+            error: "Missing required location coordinates." 
+        });
+    }
+
+    // Validate coordinates
+    if (!isValidCoordinate(source_lat, source_lng) || 
+        !isValidCoordinate(dest_lat, dest_lng)) {
+        return res.status(400).json({ 
+            error: "Invalid coordinates provided." 
+        });
+    }
+
+    try {
+        // Get user name
+        const userRes = await pool.query(
+            "SELECT name FROM users WHERE user_id = $1", 
+            [userId]
+        );
         const user_name = userRes.rows[0]?.name || 'User';
 
-        const result = await pool.query(
-            "INSERT INTO ride_requests (user_id, user_name, source_location, dest_location, status) VALUES ($1, $2, $3, $4, 'pending') RETURNING id",
-            [userId, user_name, source_location, dest_location]
+        // ✅ Calculate distance using Haversine
+        const distance = calculateDistance(
+            source_lat, source_lng, 
+            dest_lat, dest_lng
         );
+
+        // ✅ Calculate fare breakdown
+        const fareDetails = calculateFare(distance, ride_type);
+
+        // ✅ Calculate ETA
+        const eta = calculateETA(distance);
+
+        console.log(`📊 Ride Details:`);
+        console.log(`   Distance: ${distance} km`);
+        console.log(`   Fare: ₹${fareDetails.total}`);
+        console.log(`   ETA: ${eta.formattedTime}`);
+
+        // Insert ride request with calculated data
+        const result = await pool.query(`
+            INSERT INTO ride_requests (
+                user_id, 
+                user_name, 
+                source_lat, 
+                source_lng, 
+                source_address,
+                dest_lat, 
+                dest_lng, 
+                dest_address,
+                distance_km,
+                estimated_fare,
+                ride_type,
+                status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending') 
+            RETURNING id`,
+            [
+                userId, 
+                user_name, 
+                source_lat, 
+                source_lng, 
+                source_address || 'N/A',
+                dest_lat, 
+                dest_lng, 
+                dest_address || 'N/A',
+                distance,
+                fareDetails.total,
+                ride_type
+            ]
+        );
+
         const rideId = result.rows[0].id;
 
-        console.log(`(Standard Ride) Request ${rideId} from user ${userId} queued.`);
-        res.status(202).json({ success: true, message: "Request received, finding a driver.", ride_id: rideId });
+        console.log(`✅ Ride ${rideId} booked successfully`);
+
+        res.status(202).json({ 
+            success: true, 
+            message: "Request received, finding a driver.", 
+            ride_id: rideId,
+            ride_details: {
+                distance: `${distance} km`,
+                estimated_time: eta.formattedTime,
+                fare: fareDetails,
+                ride_type: ride_type
+            }
+        });
+
     } catch (e) {
-        console.error("Error booking standard ride:", e);
-        res.status(500).json({ error: "Database error." });
+        console.error("Error booking ride:", e);
+        res.status(500).json({ error: "Database error.", details: e.message });
     }
 });
 
@@ -48,13 +184,30 @@ app.post('/book-ride', authenticateToken, async (req, res) => {
 
 // ---  CREATE MEETUP (WITH ORGANIZER RIDE BOOKING) ---
 app.post('/meetups/create', authenticateToken, async (req, res) => {
-    const organizer_id = req.user.user_id; 
-    const { meetup_location, invitee_usernames, organizer_source_location } = req.body;
+    const organizer_id = req.user.user_id;
+    const { 
+        meetup_lat,
+        meetup_lng,
+        meetup_address,
+        invitee_usernames, 
+        organizer_source_lat,
+        organizer_source_lng,
+        organizer_source_address
+    } = req.body;
 
-    // ✅ NEW: Validate organizer's source location
-    if (!meetup_location || !invitee_usernames || invitee_usernames.length === 0 || !organizer_source_location) {
+    // Validate
+    if (!meetup_lat || !meetup_lng || !invitee_usernames || 
+        !organizer_source_lat || !organizer_source_lng) {
         return res.status(400).json({ 
-            error: "Missing required fields: meetup_location, invitees, or organizer_source_location." 
+            error: "Missing required fields." 
+        });
+    }
+
+    // Validate coordinates
+    if (!isValidCoordinate(meetup_lat, meetup_lng) ||
+        !isValidCoordinate(organizer_source_lat, organizer_source_lng)) {
+        return res.status(400).json({ 
+            error: "Invalid coordinates." 
         });
     }
 
@@ -62,54 +215,77 @@ app.post('/meetups/create', authenticateToken, async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        // Fetch organizer's name by the ID from the token
-        const orgRes = await client.query("SELECT name FROM users WHERE user_id = $1", [organizer_id]);
-        if (orgRes.rows.length === 0) {
-            throw new Error("Organizer not found in users table.");
-        }
+        // Get organizer name
+        const orgRes = await client.query(
+            "SELECT name FROM users WHERE user_id = $1", 
+            [organizer_id]
+        );
         const organizer_name = orgRes.rows[0].name;
 
+        // Calculate organizer's trip distance and fare
+        const organizerDistance = calculateDistance(
+            organizer_source_lat, organizer_source_lng,
+            meetup_lat, meetup_lng
+        );
+        const organizerFare = calculateFare(organizerDistance, 'standard');
+
         // Create meetup
-        const meetupRes = await client.query(
-            "INSERT INTO meetups (organizer_id, meetup_location, status) VALUES ($1, $2, $3) RETURNING id",
-            [organizer_id, meetup_location, 'pending']
+        const meetupRes = await client.query(`
+            INSERT INTO meetups (
+                organizer_id, 
+                meetup_lat, 
+                meetup_lng, 
+                meetup_address, 
+                status
+            ) VALUES ($1, $2, $3, $4, 'pending') 
+            RETURNING id`,
+            [organizer_id, meetup_lat, meetup_lng, meetup_address]
         );
         const meetup_id = meetupRes.rows[0].id;
 
-        // ✅ NEW: Book ride for the organizer FIRST
-        const organizerRideResult = await client.query(
-            "INSERT INTO ride_requests (user_id, user_name, source_location, dest_location, status) VALUES ($1, $2, $3, $4, 'pending') RETURNING id",
-            [organizer_id, organizer_name, organizer_source_location, meetup_location]
+        // Book organizer's ride
+        const organizerRideResult = await client.query(`
+            INSERT INTO ride_requests (
+                user_id, user_name, 
+                source_lat, source_lng, source_address,
+                dest_lat, dest_lng, dest_address,
+                distance_km, estimated_fare, ride_type, status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'standard', 'pending') 
+            RETURNING id`,
+            [
+                organizer_id, organizer_name,
+                organizer_source_lat, organizer_source_lng, organizer_source_address,
+                meetup_lat, meetup_lng, meetup_address,
+                organizerDistance, organizerFare.total
+            ]
         );
         const organizerRideId = organizerRideResult.rows[0].id;
-        console.log(`🚗 Organizer's ride ${organizerRideId} queued for user ${organizer_id}`);
 
-        // Find invitee user IDs (by email)
+        console.log(`✅ Organizer's ride booked: ${organizerDistance}km, ₹${organizerFare.total}`);
+
+        // Create invites (same as before)
         const userRes = await client.query(
             "SELECT user_id, email, name FROM users WHERE email = ANY($1::varchar[])",
             [invitee_usernames]
         );
         const invitees = userRes.rows;
 
-        if (invitees.length === 0) {
-            throw new Error("No valid invitees found for given emails.");
-        }
-
-        // Create invites and collect the created invite IDs per user
         const createdInvites = [];
         for (const inv of invitees) {
             const insertRes = await client.query(
                 "INSERT INTO meetup_invites (meetup_id, invitee_id, status) VALUES ($1, $2, 'pending') RETURNING id",
                 [meetup_id, inv.user_id]
             );
-            const inviteId = insertRes.rows[0].id;
-            createdInvites.push({ inviteId, user_id: inv.user_id, email: inv.email, name: inv.name });
-            console.log(`  ➕ Invite created: invite_id=${inviteId} -> user ${inv.email} (${inv.user_id})`);
+            createdInvites.push({ 
+                inviteId: insertRes.rows[0].id, 
+                user_id: inv.user_id, 
+                email: inv.email 
+            });
         }
 
         await client.query('COMMIT');
 
-        // Send notifications (one-per-invite)
+        // Send notifications
         const notifyPromises = createdInvites.map(inv => {
             return fetch(NOTIFY_SERVER_URL, {
                 method: 'POST',
@@ -122,7 +298,7 @@ app.post('/meetups/create', authenticateToken, async (req, res) => {
                         meetup_id,
                         invite_id: inv.inviteId,
                         organizer_name,
-                        meetup_location
+                        meetup_address
                     }
                 })
             });
@@ -130,20 +306,21 @@ app.post('/meetups/create', authenticateToken, async (req, res) => {
 
         await Promise.all(notifyPromises);
 
-        console.log(`🎉 Meetup ${meetup_id} created by user ${organizer_id}. Invites sent: ${createdInvites.length}`);
-        
-        // ✅ NEW: Include organizer's ride_id in response
         res.status(201).json({
             success: true,
-            message: "Meetup created, your ride is booked, and invites sent successfully!",
+            message: "Meetup created successfully!",
             meetup_id,
-            organizer_ride_id: organizerRideId, // NEW
-            invites: createdInvites.map(i => ({ invite_id: i.inviteId, user_id: i.user_id, email: i.email }))
+            organizer_ride_id: organizerRideId,
+            organizer_ride_details: {
+                distance: `${organizerDistance} km`,
+                fare: `₹${organizerFare.total}`
+            },
+            invites: createdInvites
         });
 
     } catch (e) {
         await client.query('ROLLBACK');
-        console.error("❌ Error creating meetup:", e);
+        console.error("Error creating meetup:", e);
         res.status(500).json({ error: "Database error.", details: e.message });
     } finally {
         client.release();
