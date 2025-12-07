@@ -328,17 +328,29 @@ app.post('/meetups/create', authenticateToken, async (req, res) => {
 });
 
 // --- RESPOND TO MEETUP INVITE ---
+// UPDATED backend_client.js - Replace your /meetups/invites/:id/respond endpoint
+
 app.post('/meetups/invites/:id/respond', authenticateToken, async (req, res) => {
-    const { id } = req.params; // this is the invite's id (from URL)
+    const { id } = req.params;
     const userId = req.user.user_id;
     const email = req.user.email;
-    const { response, source_location } = req.body;
+    const { 
+        response, 
+        source_lat,      // NEW: Coordinates
+        source_lng,      // NEW: Coordinates
+        source_address,  // NEW: Address
+        source_location  // OLD: Keep for backward compatibility
+    } = req.body;
 
     console.log(`🧾 Responding user: ${userId} (${email})`);
-    console.log(`📩 Invite ID (param): ${id}`);
+    console.log(`📩 Invite ID: ${id}`);
+    console.log(`📍 Location data:`, { source_lat, source_lng, source_address });
 
-    if (response === 'accepted' && !source_location) {
-        return res.status(400).json({ error: "Source location is required to accept." });
+    if (response === 'accepted') {
+        // Check if we have coordinates (new way) or text location (old way)
+        if (!source_lat && !source_lng && !source_location) {
+            return res.status(400).json({ error: "Source location is required to accept." });
+        }
     }
 
     try {
@@ -348,23 +360,32 @@ app.post('/meetups/invites/:id/respond', authenticateToken, async (req, res) => 
             [id, userId]
         );
 
-        console.log("📊 Invite check result:", inviteCheck.rows);
-
         if (inviteCheck.rows.length === 0) {
-            return res.status(403).json({ error: "You are not authorized to respond to this invite." });
+            return res.status(403).json({ 
+                error: "You are not authorized to respond to this invite." 
+            });
         }
 
         const { meetup_id } = inviteCheck.rows[0];
 
-        // Get meetup organizer so we can notify them later
-        const meetupRes = await pool.query("SELECT organizer_id FROM meetups WHERE id = $1", [meetup_id]);
+        // Get meetup details
+        const meetupRes = await pool.query(
+            "SELECT organizer_id, meetup_lat, meetup_lng, meetup_address FROM meetups WHERE id = $1", 
+            [meetup_id]
+        );
+        
         if (meetupRes.rows.length === 0) {
             return res.status(404).json({ error: "Meetup not found." });
         }
-        const organizer_id = meetupRes.rows[0].organizer_id;
+
+        const meetup = meetupRes.rows[0];
+        const organizer_id = meetup.organizer_id;
 
         if (response === 'rejected') {
-            await pool.query("UPDATE meetup_invites SET status = 'rejected' WHERE id = $1", [id]);
+            await pool.query(
+                "UPDATE meetup_invites SET status = 'rejected' WHERE id = $1", 
+                [id]
+            );
 
             // Notify organizer about rejection
             await fetch(NOTIFY_SERVER_URL, {
@@ -384,26 +405,72 @@ app.post('/meetups/invites/:id/respond', authenticateToken, async (req, res) => 
         }
 
         // Accept flow
+        // Update invite with coordinates
         await pool.query(
-            "UPDATE meetup_invites SET status = 'accepted', invitee_source_location = $1 WHERE id = $2",
-            [source_location, id]
+            `UPDATE meetup_invites 
+             SET status = 'accepted', 
+                 invitee_source_lat = $1,
+                 invitee_source_lng = $2,
+                 invitee_source_address = $3,
+                 invitee_source_location = $4
+             WHERE id = $5`,
+            [
+                source_lat || null, 
+                source_lng || null,
+                source_address || source_location || null,
+                source_location || source_address || null, // Keep old column for compatibility
+                id
+            ]
         );
 
-        // Get meetup destination and user name
-        const meetupDestRes = await pool.query("SELECT meetup_location FROM meetups WHERE id = $1", [meetup_id]);
-        const dest_location = meetupDestRes.rows[0].meetup_location;
-
+        // Get user name
         const userRes = await pool.query("SELECT name FROM users WHERE user_id = $1", [userId]);
         const user_name = userRes.rows[0]?.name || 'User';
 
+        // Calculate distance and fare if we have coordinates
+        let distance = null;
+        let fareDetails = null;
+
+        if (source_lat && source_lng && meetup.meetup_lat && meetup.meetup_lng) {
+            const { calculateDistance, calculateFare } = await import('./utils/location.js');
+            
+            distance = calculateDistance(
+                source_lat, source_lng,
+                meetup.meetup_lat, meetup.meetup_lng
+            );
+            
+            fareDetails = calculateFare(distance, 'standard');
+            console.log(`📊 Calculated: ${distance}km, ₹${fareDetails.total}`);
+        }
+
         // Create a ride request
         const rideResult = await pool.query(
-            "INSERT INTO ride_requests (user_id, user_name, source_location, dest_location, status) VALUES ($1, $2, $3, $4, 'pending') RETURNING id",
-            [userId, user_name, source_location, dest_location]
+            `INSERT INTO ride_requests (
+                user_id, user_name, 
+                source_lat, source_lng, source_address, source_location,
+                dest_lat, dest_lng, dest_address, dest_location,
+                distance_km, estimated_fare, ride_type, status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'standard', 'pending') 
+            RETURNING id`,
+            [
+                userId, 
+                user_name,
+                source_lat || null,
+                source_lng || null,
+                source_address || source_location,
+                source_location || source_address, // Keep old column
+                meetup.meetup_lat || null,
+                meetup.meetup_lng || null,
+                meetup.meetup_address,
+                meetup.meetup_address, // Keep old column
+                distance,
+                fareDetails?.total || 100.00, // Default fare if no coordinates
+                
+            ]
         );
 
         const rideId = rideResult.rows[0].id;
-        console.log(`🚗 (Meetup Ride) Request ${rideId} from user ${userId} queued.`);
+        console.log(`🚗 Ride ${rideId} created for invitee ${userId}`);
 
         // Notify organizer about acceptance
         await fetch(NOTIFY_SERVER_URL, {
@@ -422,7 +489,11 @@ app.post('/meetups/invites/:id/respond', authenticateToken, async (req, res) => 
         res.status(202).json({
             success: true,
             message: "Invite accepted! Your ride to the meetup is being booked.",
-            ride_id: rideId
+            ride_id: rideId,
+            ride_details: distance && fareDetails ? {
+                distance: `${distance} km`,
+                fare: `₹${fareDetails.total}`
+            } : null
         });
 
     } catch (e) {

@@ -7,6 +7,7 @@ import {
 
 import RideHeroImg from '../assets/Frame 16 (1).png'; 
 import LocationAutocomplete from './LocationAutocomplete';
+import AcceptInviteModal from './AcceptInviteModal';
 
 const API_SERVER = 'http://localhost:8000'; 
 
@@ -42,7 +43,8 @@ const PassengerDashboard = ({ user, token, logout, lastNotification }) => {
   const [meetupLocation, setMeetupLocation] = useState(null);
   const [meetupEmails, setMeetupEmails] = useState('');
   const [meetupSourceLocation, setMeetupSourceLocation] = useState(null);
-
+  const [showAcceptModal, setShowAcceptModal] = useState(false);
+  const [selectedInvite, setSelectedInvite] = useState(null);
   // ==========================================
   // API FUNCTIONS
   // ==========================================
@@ -147,31 +149,46 @@ const PassengerDashboard = ({ user, token, logout, lastNotification }) => {
   // ACTION HANDLERS
   // ==========================================
   
-  const handleRespondInvite = async (inviteId, response, sourceLocation = null) => {
-    try {
-      const payload = { response };
-      if (response === 'accepted') {
-        if (!sourceLocation) return alert("Source location is required!");
-        payload.source_location = sourceLocation;
+  const handleRespondInvite = async (inviteId, response, locationObject = null) => {
+  try {
+    const payload = { response };
+    
+    if (response === 'accepted') {
+      if (!locationObject) {
+        alert("Source location is required!");
+        return;
       }
-
-      const res = await fetch(`${API_SERVER}/meetups/invites/${inviteId}/respond`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json', 
-          'Authorization': `Bearer ${token}` 
-        },
-        body: JSON.stringify(payload)
-      });
-
-      if (res.ok) {
-        await fetchPassengerData();
-        if (response === 'accepted') setView('dashboard');
-      }
-    } catch (error) { 
-      alert("Network error"); 
+      
+      // Send coordinates instead of text
+      payload.source_lat = locationObject.lat;
+      payload.source_lng = locationObject.lng;
+      payload.source_address = locationObject.address;
     }
-  };
+
+    const res = await fetch(`${API_SERVER}/meetups/invites/${inviteId}/respond`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json', 
+        'Authorization': `Bearer ${token}` 
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (res.ok) {
+      setShowAcceptModal(false);
+      setSelectedInvite(null);
+      await fetchPassengerData();
+      setView('dashboard');
+      alert('✅ Invite accepted! Your ride is being booked.');
+    } else {
+      const data = await res.json();
+      alert(data.error || 'Error responding to invite');
+    }
+  } catch (error) { 
+    console.error('Error responding to invite:', error);
+    alert("Network error"); 
+  }
+};
 
   const bookRide = async () => {
     if (!sourceLocation || !destLocation) {
@@ -540,99 +557,127 @@ const PassengerDashboard = ({ user, token, logout, lastNotification }) => {
   );
 
   const renderMeetupsView = () => (
-    <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 max-w-3xl w-full mx-auto my-auto">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-xl font-bold flex items-center gap-2">
-          <Users size={20}/> Meetups
-        </h2>
-        <button 
-          onClick={() => setShowMeetupModal(true)} 
-          className="bg-black text-white px-4 py-2 rounded-lg font-bold text-sm flex gap-2 hover:bg-gray-800 transition"
-        >
-          <Plus size={16}/> Create
-        </button>
+  <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 max-w-3xl w-full mx-auto my-auto">
+    <div className="flex justify-between items-center mb-6">
+      <h2 className="text-xl font-bold flex items-center gap-2">
+        <Users size={20}/> Meetups
+      </h2>
+      <button 
+        onClick={() => setShowMeetupModal(true)} 
+        className="bg-black text-white px-4 py-2 rounded-lg font-bold text-sm flex gap-2 hover:bg-gray-800 transition"
+      >
+        <Plus size={16}/> Create
+      </button>
+    </div>
+    
+    {invites.length === 0 ? (
+      <div className="text-center py-8 text-gray-400 bg-gray-50 rounded-lg">
+        No pending invites
       </div>
-      
-      {invites.length === 0 ? (
-        <div className="text-center py-8 text-gray-400 bg-gray-50 rounded-lg">
-          No pending invites
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {invites.map(inv => (
-            <div key={inv.invite_id} className="bg-yellow-50 border border-yellow-200 p-4 rounded-lg">
-              <div className="flex justify-between items-start">
-                <div>
-                  <p className="font-bold text-gray-800 text-lg">{inv.organizer_name} invited you!</p>
-                  <p className="text-sm text-gray-600 mt-1">Meet at: <strong>{inv.meetup_location}</strong></p>
-                </div>
-                <span className="text-[10px] font-bold bg-yellow-200 text-yellow-800 px-2 py-1 rounded uppercase">
-                  Pending
-                </span>
+    ) : (
+      <div className="space-y-3">
+        {invites.map(inv => (
+          <div key={inv.invite_id} className="bg-yellow-50 border border-yellow-200 p-4 rounded-lg">
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="font-bold text-gray-800 text-lg">{inv.organizer_name} invited you!</p>
+                <p className="text-sm text-gray-600 mt-1">
+                  Meet at: <strong>{inv.meetup_address || inv.meetup_location}</strong>
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {new Date(inv.invite_created_at).toLocaleString()}
+                </p>
               </div>
-              <div className="flex gap-3 mt-4">
-                <button 
-                  onClick={() => {
-                    const src = prompt("Enter your pickup location:");
-                    if (src) handleRespondInvite(inv.invite_id, 'accepted', src);
-                  }}
-                  className="flex-1 bg-black text-white py-2 rounded-lg text-sm font-bold hover:bg-gray-800 transition"
-                >
-                  Accept & Ride
-                </button>
-                <button 
-                  onClick={() => {
-                    if (window.confirm("Decline?")) handleRespondInvite(inv.invite_id, 'rejected');
-                  }}
-                  className="flex-1 bg-white border border-gray-300 text-gray-600 py-2 rounded-lg text-sm font-bold hover:bg-gray-50 transition"
-                >
-                  Decline
-                </button>
-              </div>
+              <span className="text-[10px] font-bold bg-yellow-200 text-yellow-800 px-2 py-1 rounded uppercase">
+                Pending
+              </span>
             </div>
-          ))}
-        </div>
-      )}
-
-      {/* Meetup Creation Modal */}
-      {showMeetupModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
-          <div className="bg-white p-6 rounded-xl w-full max-w-md shadow-2xl">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="font-bold text-xl">Create Meetup</h3>
-              <button onClick={resetMeetupModal}>
-                <X className="text-gray-400 hover:text-black"/>
-              </button>
-            </div>
-            <div className="space-y-4">
-              <LocationAutocomplete
-                placeholder="Meetup destination"
-                onLocationSelect={setMeetupLocation}
-                type="destination"
-              />
-              <LocationAutocomplete
-                placeholder="Your pickup location"
-                onLocationSelect={setMeetupSourceLocation}
-                type="pickup"
-              />
-              <textarea 
-                className="w-full bg-gray-100 p-3 rounded-lg h-24" 
-                value={meetupEmails} 
-                onChange={e => setMeetupEmails(e.target.value)} 
-                placeholder="Usernames: user1, user2, user3" 
-              />
+            
+            <div className="flex gap-3 mt-4">
+              {/* UPDATED: Use modal instead of prompt */}
               <button 
-                onClick={createMeetup} 
-                className="w-full bg-black text-white py-3 rounded-lg font-bold hover:bg-gray-800 transition"
+                onClick={() => {
+                  setSelectedInvite(inv);
+                  setShowAcceptModal(true);
+                }}
+                className="flex-1 bg-black text-white py-2 rounded-lg text-sm font-bold hover:bg-gray-800 transition flex items-center justify-center gap-2"
               >
-                Send Invites
+                <CheckCircle size={16}/> Accept & Ride
+              </button>
+              <button 
+                onClick={() => {
+                  if (window.confirm("Decline this invite?")) {
+                    handleRespondInvite(inv.invite_id, 'rejected');
+                  }
+                }}
+                className="flex-1 bg-white border border-gray-300 text-gray-600 py-2 rounded-lg text-sm font-bold hover:bg-gray-50 transition"
+              >
+                Decline
               </button>
             </div>
           </div>
+        ))}
+      </div>
+    )}
+
+    {/* Accept Invite Modal with Autocomplete */}
+    {showAcceptModal && selectedInvite && (
+      <AcceptInviteModal
+        invite={selectedInvite}
+        onAccept={(inviteId, locationObject) => {
+          handleRespondInvite(inviteId, 'accepted', locationObject);
+        }}
+        onCancel={() => {
+          setShowAcceptModal(false);
+          setSelectedInvite(null);
+        }}
+      />
+    )}
+
+    {/* Meetup Creation Modal (keep this as is) */}
+    {showMeetupModal && (
+      <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
+        <div className="bg-white p-6 rounded-xl w-full max-w-md shadow-2xl">
+          <div className="flex justify-between items-center mb-6">
+            <h3 className="font-bold text-xl">Create Meetup</h3>
+            <button onClick={resetMeetupModal}>
+              <X className="text-gray-400 hover:text-black"/>
+            </button>
+          </div>
+          <div className="space-y-4">
+            <LocationAutocomplete
+              placeholder="Meetup destination"
+              onLocationSelect={setMeetupLocation}
+              type="destination"
+            />
+            <LocationAutocomplete
+              placeholder="Your pickup location"
+              onLocationSelect={setMeetupSourceLocation}
+              type="pickup"
+            />
+            <textarea 
+              className="w-full bg-gray-100 p-3 rounded-lg h-24" 
+              value={meetupEmails} 
+              onChange={e => setMeetupEmails(e.target.value)} 
+              placeholder="Emails: user1@example.com, user2@example.com" 
+            />
+            <button 
+              onClick={createMeetup} 
+              disabled={!meetupLocation || !meetupSourceLocation || !meetupEmails}
+              className={`w-full py-3 rounded-lg font-bold transition ${
+                meetupLocation && meetupSourceLocation && meetupEmails
+                  ? 'bg-black text-white hover:bg-gray-800'
+                  : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              }`}
+            >
+              Send Invites
+            </button>
+          </div>
         </div>
-      )}
-    </div>
-  );
+      </div>
+    )}
+  </div>
+);
 
   const renderHistoryView = () => (
     <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 h-full flex flex-col max-w-4xl w-full mx-auto">

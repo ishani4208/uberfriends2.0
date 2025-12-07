@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { 
   MapPin, CheckCircle, History, Car, Navigation, DollarSign, X, ChevronRight 
 } from 'lucide-react';
-import  driverimage from "../assets/driverpic.jpg";
+import driverimage from "../assets/driverpic.jpg";
+
 const DRIVER_SERVER = 'http://localhost:8080';
 
 const customStyles = `
@@ -37,7 +38,6 @@ const customStyles = `
     box-shadow: inset 0 8px 24px rgba(0,0,0,0.1);
     flex-shrink: 0;
   }
-  /* Smooth transition for grid layout changes */
   .layout-transition {
     transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   }
@@ -45,16 +45,18 @@ const customStyles = `
 
 const DriverDashboard = ({ user, token, lastNotification }) => {
   const [status, setStatus] = useState('offline');
-  const [stats, setStats] = useState({ total: 0, completed: 0, cancelled: 0 });
+  const [stats, setStats] = useState({ 
+    total: 0, 
+    completed: 0, 
+    cancelled: 0,
+    earnings: 0 
+  });
   const [activeJob, setActiveJob] = useState(null);
   const [rides, setRides] = useState([]);
   const [showAcceptModal, setShowAcceptModal] = useState(false);
   const [showProgressModal, setShowProgressModal] = useState(false);
-  
-  // State for History Toggle
   const [showHistory, setShowHistory] = useState(false);
 
-  // Fetch Driver Data
   const fetchDriverData = async () => {
     try {
       console.log("Fetching driver data...");
@@ -72,18 +74,29 @@ const DriverDashboard = ({ user, token, lastNotification }) => {
       
       if (histData.rides) {
         setRides(histData.rides);
+        
         const newStats = histData.rides.reduce((acc, r) => {
           acc.total++;
           if (r.status === 'completed') acc.completed++;
           if (r.status === 'cancelled') acc.cancelled++;
           return acc;
-        }, { total: 0, completed: 0, cancelled: 0 });
+        }, { total: 0, completed: 0, cancelled: 0, earnings: 0 });
+        
+        // Fetch real earnings
+        const statsRes = await fetch(`${DRIVER_SERVER}/driver/stats`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const statsData = await statsRes.json();
+        
+        if (statsData.success) {
+          newStats.earnings = statsData.stats.total_earnings;
+        }
+        
         setStats(newStats);
       }
     } catch (e) { console.error("Driver fetch error:", e); }
   };
 
-  // Real-time invite listener
   useEffect(() => { 
     if (lastNotification?.type === 'ride_assigned') {
         console.log("New Ride Assigned!", lastNotification);
@@ -95,7 +108,6 @@ const DriverDashboard = ({ user, token, lastNotification }) => {
     }
   }, [lastNotification]);
 
-  // Update Status
   const updateStatus = async (newStatus) => {
     try {
       await fetch(`${DRIVER_SERVER}/driver/status`, {
@@ -107,7 +119,6 @@ const DriverDashboard = ({ user, token, lastNotification }) => {
     } catch (e) { alert(e.message); }
   };
 
-  // Complete Ride
   const completeRide = async () => {
     if (!activeJob) return;
     try {
@@ -125,7 +136,6 @@ const DriverDashboard = ({ user, token, lastNotification }) => {
     } catch (e) { alert("Error completing ride"); }
   };
 
-  // Reject / Cancel Ride
   const handleDecision = async (decision) => {
     if (!activeJob) return;
 
@@ -147,7 +157,6 @@ const DriverDashboard = ({ user, token, lastNotification }) => {
     }
   };
 
-  // Get status badge color and text
   const getStatusDisplay = () => {
     if (activeJob) {
       return { 
@@ -179,7 +188,6 @@ const DriverDashboard = ({ user, token, lastNotification }) => {
     <div>
       <style>{customStyles}</style>
       
-      {/* 🚨 DRIVER INVITE MODAL */}
       {showAcceptModal && activeJob && (
         <div className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center items-center bg-black bg-opacity-90 backdrop-blur-sm p-4">
             <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl animate-slide-up border-4 border-black">
@@ -233,7 +241,6 @@ const DriverDashboard = ({ user, token, lastNotification }) => {
         </div>
       )}
 
-      {/* Progress Modal */}
       {showProgressModal && activeJob && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70 backdrop-blur-sm p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden border-4 border-black animate-slide-up">
@@ -300,17 +307,12 @@ const DriverDashboard = ({ user, token, lastNotification }) => {
         </div>
       )}
 
-      {/* Main Content */}
       <div className="max-w-11xl mx-auto px-3 py-3">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-40 transition-all duration-500">
           
-          {/* Left Section - Hero & Stats */}
-          {/* Dynamic Class: Spans 3 cols when history is closed, 2 cols when open */}
           <div className={`${showHistory ? 'lg:col-span-2' : 'lg:col-span-3'} space-y-2 layout-transition`}>
             
-            {/* Hero Section */}
-            <div className="  relative overflow-hidden flex items-center justify-between" style={{minHeight: '380px'}}>
-              {/* Left Side: Text */}
+            <div className="relative overflow-hidden flex items-center justify-between" style={{minHeight: '380px'}}>
               <div className="relative z-10 max-w-2xl px-10">
                 <h1 className="text-5xl font-black mb-4 leading-tight text-gray-900">
                   Good Morning 
@@ -321,20 +323,15 @@ const DriverDashboard = ({ user, token, lastNotification }) => {
                 </p>
               </div>
               
-              {/* Right Side: Decorative Circle */}
-{/* Right Side: Decorative Circle with Image */}
-{/* Added 'overflow-hidden' to clip the image to the circle shape */}
-<div className="hero-circle flex items-center justify-center mr-10 overflow-hidden relative shadow-inner">
-    <img
-                        src={driverimage} 
-                        alt="Ride Illustration"
-    className="w-full h-full object-cover opacity-90" 
-    />
-</div>
+              <div className="hero-circle flex items-center justify-center mr-10 overflow-hidden relative shadow-inner">
+                <img
+                  src={driverimage} 
+                  alt="Ride Illustration"
+                  className="w-full h-full object-cover opacity-90" 
+                />
+              </div>
 
-              {/* Top Right Action Buttons */}
               <div className="absolute top-1 right-6 z-20 flex items-center gap-3">
-                {/* 1. History Toggle Button */}
                 <button 
                     onClick={() => setShowHistory(!showHistory)}
                     className={`px-4 py-2.5 rounded-full font-bold text-sm flex items-center gap-2 shadow-md transition-all border border-gray-200
@@ -343,7 +340,6 @@ const DriverDashboard = ({ user, token, lastNotification }) => {
                     <History size={16}/> {showHistory ? 'Hide History' : 'History'}
                 </button>
 
-                {/* 2. Status / Ride Button */}
                 <button
                     onClick={() => {
                     if (!activeJob) {
@@ -359,8 +355,9 @@ const DriverDashboard = ({ user, token, lastNotification }) => {
                 </button>
               </div>
             </div>
-<h2 className="text-4xl font-black text-gray-900"></h2>
- {/* STATS GRID */}
+
+            <h2 className="text-4xl font-black text-gray-900"></h2>
+            
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="group bg-white rounded-3xl p-8 border border-gray-100 shadow-sm flex flex-col items-center justify-center gap-3 transition-all duration-500 hover:bg-black hover:border-black hover:shadow-2xl hover:-translate-y-1 cursor-default relative overflow-hidden">
                     <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-2 group-hover:bg-gray-800 transition-colors">
@@ -383,21 +380,19 @@ const DriverDashboard = ({ user, token, lastNotification }) => {
                         <DollarSign size={32} className="text-gray-400 group-hover:text-white" />
                     </div>
                     <h3 className="text-gray-400 font-bold text-sm tracking-wide group-hover:text-gray-400">EARNINGS</h3>
-                    <p className="text-5xl font-black text-gray-900 group-hover:text-white transition-colors tracking-tight">${stats.completed * 20}</p>
+                    <p className="text-5xl font-black text-gray-900 group-hover:text-white transition-colors tracking-tight">
+                        ₹{stats.earnings.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
                 </div>
             </div>
         </div>
 
-        {/* Right Sidebar (History) */}
-{/* Right Sidebar (History) */}
         {showHistory && (
             <div className="lg:col-span-1 animate-slide-in-right">
                 <div className="bg-white rounded-3xl shadow-xl border border-gray-100 p-6 flex flex-col h-[600px] relative overflow-hidden">
                     
-                    {/* Decorative Gradient Top */}
                     <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-gray-200 via-gray-400 to-gray-200 opacity-50"></div>
                     
-                    {/* Header */}
                     <div className="flex justify-between items-center mb-6 shrink-0">
                         <div>
                             <h3 className="font-black text-xl text-gray-900">Ride History</h3>
@@ -408,7 +403,6 @@ const DriverDashboard = ({ user, token, lastNotification }) => {
                         </button>
                     </div>
                     
-                    {/* Scrollable Area */}
                     <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-4">
                         {rides.map(r => (
                             <div key={r.ride_id} className="group p-4 rounded-2xl border border-gray-100 hover:border-gray-300 hover:shadow-lg bg-white transition-all cursor-default">
@@ -419,10 +413,14 @@ const DriverDashboard = ({ user, token, lastNotification }) => {
                                         </div>
                                         <div>
                                             <p className="font-bold text-sm text-gray-900">{r.passenger_name}</p>
-                                            <p className="text-xs text-gray-400 font-medium">Today, 2:30 PM</p>
+                                            <p className="text-xs text-gray-400 font-medium">
+                                                {new Date(r.created_at).toLocaleDateString('en-IN')}
+                                            </p>
                                         </div>
                                     </div>
-                                    <span className="font-bold text-sm text-gray-900">$24.00</span>
+                                    <span className="font-bold text-sm text-gray-900">
+                                        ₹{r.estimated_fare ? r.estimated_fare.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+                                    </span>
                                 </div>
                                 
                                 <div className="space-y-2 pl-3 border-l-2 border-gray-100 ml-5 relative">
@@ -436,8 +434,7 @@ const DriverDashboard = ({ user, token, lastNotification }) => {
                                     </div>
                                 </div>
 
-                                {/* Status Badge Restored */}
-                                <div className="mt-4 pt-3 border-t border-gray-50 flex justify-end">
+                                <div className="mt-4 pt-3 border-t border-gray-50 flex justify-between items-center">
                                     <span className={`text-[10px] px-2 py-1 rounded-full font-bold uppercase ${
                                         r.status === 'completed' ? 'bg-green-100 text-green-700' : 
                                         r.status === 'assigned' ? 'bg-yellow-100 text-yellow-700' :
@@ -445,6 +442,11 @@ const DriverDashboard = ({ user, token, lastNotification }) => {
                                     }`}>
                                         {r.status}
                                     </span>
+                                    {r.distance_km && (
+                                        <span className="text-xs text-gray-400 font-medium">
+                                            {r.distance_km} km
+                                        </span>
+                                    )}
                                 </div>
                             </div>
                         ))}

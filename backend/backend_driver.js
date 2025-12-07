@@ -297,11 +297,9 @@ app.put('/driver/complete-ride/:ride_id', authenticateToken, async (req, res) =>
     }
 });
 
-// ADD THIS TO YOUR backend_driver.js file
-
 // GET DRIVER STATISTICS
 app.get('/driver/stats', authenticateToken, async (req, res) => {
-    const driverId = req.user.user_id; // From JWT token
+    const driverId = req.user.user_id;
     
     console.log(`📊 Fetching stats for driver ${driverId}`);
     
@@ -309,6 +307,13 @@ app.get('/driver/stats', authenticateToken, async (req, res) => {
         // Get total completed rides
         const completedResult = await pool.query(`
             SELECT COUNT(*) as total_completed
+            FROM ride_requests
+            WHERE assigned_driver_id = $1 AND status = 'completed'
+        `, [driverId]);
+        
+        // ✅ NEW: Get total earnings by summing actual fares
+        const earningsResult = await pool.query(`
+            SELECT COALESCE(SUM(estimated_fare), 0) as total_earnings
             FROM ride_requests
             WHERE assigned_driver_id = $1 AND status = 'completed'
         `, [driverId]);
@@ -336,14 +341,17 @@ app.get('/driver/stats', authenticateToken, async (req, res) => {
         `, [driverId]);
         
         const totalCompleted = parseInt(completedResult.rows[0].total_completed);
+        const totalEarnings = parseFloat(earningsResult.rows[0].total_earnings);
         const currentStatus = statusResult.rows[0].status;
         
         console.log(`✅ Driver ${driverId} has completed ${totalCompleted} rides`);
+        console.log(`💰 Total earnings: ₹${totalEarnings}`);
         
         res.json({
             success: true,
             stats: {
                 total_completed: totalCompleted,
+                total_earnings: totalEarnings, // ✅ Real earnings from database
                 current_status: currentStatus,
                 ride_breakdown: breakdownResult.rows
             }
@@ -354,7 +362,6 @@ app.get('/driver/stats', authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch driver stats', details: e.message });
     }
 });
-
 // ===========================================
 // == VIEW DRIVER'S CURRENT RIDE ==
 // ===========================================
@@ -412,6 +419,7 @@ app.get('/driver/rides', authenticateToken, async (req, res) => {
     console.log(`🔍 Fetching all rides for driver ${userId}`);
     
     try {
+        // ✅ UPDATED: Now includes estimated_fare
         const result = await pool.query(`
             SELECT 
                 rr.id as ride_id,
@@ -420,7 +428,10 @@ app.get('/driver/rides', authenticateToken, async (req, res) => {
                 rr.source_location,
                 rr.dest_location,
                 rr.status,
-                rr.created_at
+                rr.created_at,
+                rr.estimated_fare,  -- ✅ Added this
+                rr.distance_km,     -- ✅ Added this for reference
+                rr.ride_type        -- ✅ Added this for reference
             FROM ride_requests rr
             WHERE rr.assigned_driver_id = $1
             ORDER BY rr.created_at DESC
